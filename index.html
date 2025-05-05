@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Strava Aktivitäten Dashboard (PKCE OAuth)</title>
+  <title>Strava Aktivitäten Dashboard (PKCE + Exchange-Server)</title>
   <style>
     body { font-family: sans-serif; margin: 20px; }
     #login, #controls, #activities { margin-bottom: 20px; }
@@ -18,12 +18,12 @@
 <body>
   <h1>Strava Aktivitäten Dashboard</h1>
 
-  <!-- 1. Login -->
+  <!-- 1. Login Button -->
   <div id="login">
     <button id="btnLogin" class="btn">Mit Strava verbinden</button>
   </div>
 
-  <!-- 2. Steuerung: Filter & Bulk-Action -->
+  <!-- 2. Filter & Bulk-Action Controls -->
   <div id="controls" class="hidden">
     <label>Sportart:
       <select id="filterSport"><option value="">Alle</option></select>
@@ -45,7 +45,7 @@
     </select>
   </div>
 
-  <!-- 3. Aktivitäten-Tabelle -->
+  <!-- 3. Activities Table -->
   <table id="activities" class="hidden">
     <thead>
       <tr>
@@ -61,17 +61,19 @@
 
   <script>
     // === Konfiguration ===
-    const CLIENT_ID = '157778';
+    const CLIENT_ID = '157778';  // aus Strava Developer Settings
     const REDIRECT_URI = window.location.origin + window.location.pathname;
     const SCOPES = 'activity:read_all,activity:write';
-
     let accessToken = null;
 
-    // === PKCE Helpers ===
+    // === PKCE-Helper ===
     function generateCodeVerifier() {
       const array = new Uint8Array(56);
       window.crypto.getRandomValues(array);
-      return btoa(String.fromCharCode(...array)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      return btoa(String.fromCharCode(...array))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
     }
 
     async function generateCodeChallenge(verifier) {
@@ -81,7 +83,7 @@
       return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
 
-    // === OAuth Flow ===
+    // === OAuth: Login + Token Exchange via Local Server ===
     async function login() {
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
@@ -97,42 +99,88 @@
       window.location = authUrl;
     }
 
-// === Token Exchange über lokalen Server ===
-async function exchangeCodeForToken(code) {
-  // Tausche Code über lokalen Express-Server auf Port 3000
-  const resp = await fetch('http://localhost:3000/exchange', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code })
-  });
-  const data = await resp.json();
-  if (data.access_token) {
-    accessToken = data.access_token;
-  } else {
-    console.error('Exchange-Fehler:', data);
-    throw new Error('Token-Exchange fehlgeschlagen: ' + JSON.stringify(data));
-  }
-}
-
     function getQueryParam(name) {
       return new URLSearchParams(window.location.search).get(name);
     }
 
-    // === API Funktionen ===
+    async function exchangeCodeForToken(code) {
+      const resp = await fetch('http://localhost:3000/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+      const data = await resp.json();
+      if (data.access_token) {
+        accessToken = data.access_token;
+      } else {
+        console.error('Exchange-Fehler:', data);
+        throw new Error('Token-Exchange fehlgeschlagen: ' + JSON.stringify(data));
+      }
+    }
+
+    // === API-Funktionen ===
     async function loadActivities() {
       const resp = await fetch('https://www.strava.com/api/v3/athlete/activities?per_page=100', {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
       const data = await resp.json();
-      if (!Array.isArray(data)) throw new Error('Strava API: ' + data.message);
+      if (!Array.isArray(data)) throw new Error('Strava API: ' + (data.message || JSON.stringify(data)));
       return data;
     }
 
-    // === Rendering & Filter ===
-    function populateSportFilter(activities) { /* unverändert */ }
-    function renderTable(activities) { /* unverändert */ }
-    function applyFilter() { /* unverändert */ }
-    async function updatePrivacy(ids, newVis) { /* unverändert */ init(); }
+    function populateSportFilter(activities) {
+      const set = new Set(activities.map(a => a.sport_type));
+      const sel = document.getElementById('filterSport');
+      set.forEach(type => {
+        const opt = document.createElement('option');
+        opt.value = type;
+        opt.textContent = type;
+        sel.appendChild(opt);
+      });
+    }
+
+    function renderTable(activities) {
+      const tbody = document.querySelector('#activities tbody');
+      tbody.innerHTML = '';
+      activities.forEach(a => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input type="checkbox" data-id="${a.id}"></td>
+          <td>${new Date(a.start_date).toLocaleDateString()}</td>
+          <td>${a.name}</td>
+          <td>${a.sport_type}</td>
+          <td>${a.visibility}</td>
+        `;
+        tr.dataset.privacy = a.visibility;
+        tr.dataset.sport = a.sport_type;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function applyFilter() {
+      const sport = document.getElementById('filterSport').value;
+      const privacy = document.getElementById('filterPrivacy').value;
+      document.querySelectorAll('#activities tbody tr').forEach(tr => {
+        const matchSport = !sport || tr.dataset.sport === sport;
+        const matchPriv = !privacy || tr.dataset.privacy === privacy;
+        tr.style.display = (matchSport && matchPriv) ? '' : 'none';
+      });
+    }
+
+    async function updatePrivacy(ids, newVis) {
+      for (let id of ids) {
+        await fetch(`https://www.strava.com/api/v3/activities/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ visibility: newVis })
+        });
+      }
+      alert('Privatsphäre geändert');
+      init();
+    }
 
     // === Initialization ===
     async function init() {
@@ -155,10 +203,26 @@ async function exchangeCodeForToken(code) {
     // === Event-Listener ===
     document.getElementById('btnLogin').addEventListener('click', login);
     document.getElementById('btnApplyFilter').addEventListener('click', applyFilter);
-    document.getElementById('chkAll').addEventListener('change', function() { /* unverändert */ });
-    document.querySelector('#activities tbody').addEventListener('change', function(e) { /* unverändert */ });
-    document.getElementById('btnUpdatePrivacy').addEventListener('click', () => { /* unverändert */ });
+    document.getElementById('chkAll').addEventListener('change', function() {
+      const checked = this.checked;
+      document.querySelectorAll('#activities tbody input[type=checkbox]').forEach(cb => cb.checked = checked);
+      document.getElementById('btnUpdatePrivacy').disabled = !checked;
+      document.getElementById('newPrivacy').disabled = !checked;
+    });
+    document.querySelector('#activities tbody').addEventListener('change', function(e) {
+      if (e.target.matches('input[type=checkbox]')) {
+        const any = [...document.querySelectorAll('#activities tbody input')].some(cb => cb.checked);
+        document.getElementById('btnUpdatePrivacy').disabled = !any;
+        document.getElementById('newPrivacy').disabled = !any;
+      }
+    });
+    document.getElementById('btnUpdatePrivacy').addEventListener('click', () => {
+      const newVis = document.getElementById('newPrivacy').value;
+      const ids = [...document.querySelectorAll('#activities tbody input:checked')].map(cb => cb.dataset.id);
+      updatePrivacy(ids, newVis);
+    });
 
+    // Start the app
     init();
   </script>
 </body>

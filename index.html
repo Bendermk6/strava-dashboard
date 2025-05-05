@@ -97,20 +97,22 @@
       window.location = authUrl;
     }
 
-    async function exchangeCodeForToken(code) {
-      const verifier = localStorage.getItem('pkce_verifier');
-      const resp = await fetch('https://www.strava.com/oauth/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: CLIENT_ID, code: code, grant_type: 'authorization_code', code_verifier: verifier })
-      });
-      const data = await resp.json();
-      if (data.access_token) {
-        accessToken = data.access_token;
-      } else {
-        throw new Error('Token Exchange Fehler: ' + JSON.stringify(data));
-      }
-    }
+// === Token Exchange über lokalen Server ===
+async function exchangeCodeForToken(code) {
+  // Tausche Code über lokalen Express-Server auf Port 3000
+  const resp = await fetch('http://localhost:3000/exchange', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code })
+  });
+  const data = await resp.json();
+  if (data.access_token) {
+    accessToken = data.access_token;
+  } else {
+    console.error('Exchange-Fehler:', data);
+    throw new Error('Token-Exchange fehlgeschlagen: ' + JSON.stringify(data));
+  }
+}
 
     function getQueryParam(name) {
       return new URLSearchParams(window.location.search).get(name);

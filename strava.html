@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Strava Aktivitäten Dashboard (PKCE OAuth)</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    #login, #controls, #activities { margin-bottom: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #fc5200; color: white; }
+    .hidden { display: none; }
+    .btn { padding: 6px 12px; background: #fc5200; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>Strava Aktivitäten Dashboard</h1>
+
+  <!-- 1. Login -->
+  <div id="login">
+    <button id="btnLogin" class="btn">Mit Strava verbinden</button>
+  </div>
+
+  <!-- 2. Steuerung: Filter & Bulk-Action -->
+  <div id="controls" class="hidden">
+    <label>Sportart:
+      <select id="filterSport"><option value="">Alle</option></select>
+    </label>
+    <label style="margin-left:20px;">Privatsphäre:
+      <select id="filterPrivacy">
+        <option value="">Alle</option>
+        <option value="everyone">Öffentlich</option>
+        <option value="followers_only">Abonnenten</option>
+        <option value="only_me">Nur ich</option>
+      </select>
+    </label>
+    <button id="btnApplyFilter" class="btn" style="margin-left:20px;" disabled>Filter anwenden</button>
+    <button id="btnUpdatePrivacy" class="btn" disabled style="margin-left:20px;">Privatsphäre ändern</button>
+    <select id="newPrivacy" disabled>
+      <option value="everyone">Öffentlich</option>
+      <option value="followers_only">Abonnenten</option>
+      <option value="only_me">Nur ich</option>
+    </select>
+  </div>
+
+  <!-- 3. Aktivitäten-Tabelle -->
+  <table id="activities" class="hidden">
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="chkAll"></th>
+        <th>Datum</th>
+        <th>Name</th>
+        <th>Sportart</th>
+        <th>Privatsphäre</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    // === Konfiguration ===
+    const CLIENT_ID = '157778';
+    const REDIRECT_URI = window.location.origin + window.location.pathname;
+    const SCOPES = 'activity:read_all,activity:write';
+
+    let accessToken = null;
+
+    // === PKCE Helpers ===
+    function generateCodeVerifier() {
+      const array = new Uint8Array(56);
+      window.crypto.getRandomValues(array);
+      return btoa(String.fromCharCode(...array)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function generateCodeChallenge(verifier) {
+      const data = new TextEncoder().encode(verifier);
+      const hash = await window.crypto.subtle.digest('SHA-256', data);
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(hash)));
+      return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    // === OAuth Flow ===
+    async function login() {
+      const verifier = generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
+      localStorage.setItem('pkce_verifier', verifier);
+      const authUrl = `https://www.strava.com/oauth/authorize` +
+        `?client_id=${CLIENT_ID}` +
+        `&response_type=code` +
+        `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+        `&approval_prompt=auto` +
+        `&scope=${encodeURIComponent(SCOPES)}` +
+        `&code_challenge=${challenge}` +
+        `&code_challenge_method=S256`;
+      window.location = authUrl;
+    }
+
+    async function exchangeCodeForToken(code) {
+      const verifier = localStorage.getItem('pkce_verifier');
+      const resp = await fetch('https://www.strava.com/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: CLIENT_ID, code: code, grant_type: 'authorization_code', code_verifier: verifier })
+      });
+      const data = await resp.json();
+      if (data.access_token) {
+        accessToken = data.access_token;
+      } else {
+        throw new Error('Token Exchange Fehler: ' + JSON.stringify(data));
+      }
+    }
+
+    function getQueryParam(name) {
+      return new URLSearchParams(window.location.search).get(name);
+    }
+
+    // === API Funktionen ===
+    async function loadActivities() {
+      const resp = await fetch('https://www.strava.com/api/v3/athlete/activities?per_page=100', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await resp.json();
+      if (!Array.isArray(data)) throw new Error('Strava API: ' + data.message);
+      return data;
+    }
+
+    // === Rendering & Filter ===
+    function populateSportFilter(activities) { /* unverändert */ }
+    function renderTable(activities) { /* unverändert */ }
+    function applyFilter() { /* unverändert */ }
+    async function updatePrivacy(ids, newVis) { /* unverändert */ init(); }
+
+    // === Initialization ===
+    async function init() {
+      const code = getQueryParam('code');
+      if (code && !accessToken) {
+        await exchangeCodeForToken(code);
+        history.replaceState({}, '', REDIRECT_URI);
+      }
+      if (!accessToken) return;
+
+      document.getElementById('login').classList.add('hidden');
+      document.getElementById('controls').classList.remove('hidden');
+
+      const activities = await loadActivities();
+      populateSportFilter(activities);
+      renderTable(activities);
+      document.getElementById('btnApplyFilter').disabled = false;
+    }
+
+    // === Event-Listener ===
+    document.getElementById('btnLogin').addEventListener('click', login);
+    document.getElementById('btnApplyFilter').addEventListener('click', applyFilter);
+    document.getElementById('chkAll').addEventListener('change', function() { /* unverändert */ });
+    document.querySelector('#activities tbody').addEventListener('change', function(e) { /* unverändert */ });
+    document.getElementById('btnUpdatePrivacy').addEventListener('click', () => { /* unverändert */ });
+
+    init();
+  </script>
+</body>
+</html>
